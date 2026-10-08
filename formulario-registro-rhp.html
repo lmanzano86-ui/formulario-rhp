@@ -196,6 +196,11 @@
     background: linear-gradient(180deg, rgba(250,246,234,.78) 0%, rgba(250,246,234,.60) 100%);
   }
   .header, .wrap { position: relative; z-index: 2; }
+
+    .netstatus{font-size:13px;font-weight:700;text-align:center;margin-bottom:10px;padding:8px;border-radius:8px;display:none}
+    .netstatus.off{display:block;background:#fff3cd;color:#856404}
+    .netstatus.on{display:block;background:#d4edda;color:#155724}
+    .pending{background:#fff3cd;border:1px solid #ffeeba;color:#856404;border-radius:8px;padding:10px 12px;font-size:14px;margin-bottom:12px}
 </style>
 </head>
 <body>
@@ -227,6 +232,9 @@
     <div class="card">
       <h2>🛡️ Tus datos</h2>
       <div class="sub">Te contactaremos con tu cotización</div>
+      
+      <div class="netstatus" id="netStatus"></div>
+      <div class="pending" id="pendingBox" style="display:none">⏳ Tienes <b id="pendingCount">0</b> registro(s) guardados sin enviar. Se enviarán solos cuando haya conexión.</div>
       <div class="success" id="successBox">
         ✅ ¡Listo! <span id="successName"></span> ya está participando.
         <small>Llama a la siguiente persona.</small>
@@ -234,28 +242,18 @@
       <form id="regForm" onsubmit="return guardar(event)" novalidate>
         <div class="field">
           <label for="nombre">Nombre completo</label>
-          <input type="text" id="nombre" autocomplete="name" placeholder="Ej: María González">
+          <input type="text" id="nombre" name="nombre" autocomplete="name" placeholder="Ej: María González">
           <div class="error" id="errNombre">Escribe el nombre.</div>
         </div>
         <div class="field">
           <label for="telefono">Teléfono</label>
-          <input type="tel" id="telefono" inputmode="tel" autocomplete="tel" placeholder="Ej: 813 555 1234">
+          <input type="tel" id="telefono" name="telefono" inputmode="tel" autocomplete="tel" placeholder="Ej: 813 555 1234">
           <div class="error" id="errTelefono">Escribe un teléfono válido.</div>
         </div>
         <div class="field">
           <label for="correo">Correo electrónico</label>
-          <input type="email" id="correo" inputmode="email" autocomplete="email" placeholder="Ej: maria@correo.com">
+          <input type="email" id="correo" name="email" inputmode="email" autocomplete="email" placeholder="Ej: maria@correo.com">
           <div class="error" id="errCorreo">Escribe un correo válido.</div>
-        </div>
-        <div class="field">
-          <label for="edad">Edad</label>
-          <input type="text" id="edad" inputmode="numeric" maxlength="3" placeholder="Ej: 35">
-          <div class="error" id="errEdad">Escribe una edad válida.</div>
-        </div>
-        <div class="field">
-          <label for="zip">Código postal</label>
-          <input type="text" id="zip" inputmode="numeric" autocomplete="postal-code" maxlength="10" placeholder="Ej: 33607">
-          <div class="error" id="errZip">Escribe el código postal.</div>
         </div>
         <button type="submit" class="btn">Registrar y participar 🎡</button>
       </form>
@@ -277,12 +275,27 @@
       <div id="listBox"></div>
       <button class="btn secondary" onclick="copiarTodos()">📋 Copiar todos</button>
       <button class="btn secondary" onclick="descargarCSV()">⬇️ Descargar CSV</button>
+      <button class="btn secondary" onclick="descargarOffline()">📥 Descargar versión offline</button>
       <button class="btn danger" onclick="borrarTodo()">🗑️ Borrar lista</button>
     </div>
   </div>
 </div>
 
 <script>
+/* ===== CONFIGURACIÓN — EDITA ESTOS DOS VALORES ===== */
+var EMAIL_DESTINO = "REEMPLAZAR@correo.com"; // <-- pon aquí el correo donde quieres RECIBIR los registros
+var ENCUESTA_TEXTO =
+"¡Gracias por registrarte! \n\n" +
+"Soy Lester Manzano de RHP Financial (Protección Integral de Seguros). " +
+"Para prepararte la mejor cotización, responde esta breve encuesta sobre seguros:\n\n" +
+"1) ¿Qué tipo de seguro te interesa? (vida, salud, dental/visión, otro)\n" +
+"2) ¿Tienes algún seguro actualmente? (sí / no)\n" +
+"3) ¿A cuántas personas quieres proteger? (solo yo / mi familia)\n" +
+"4) ¿Cuál es el mejor horario para llamarte?\n\n" +
+"Responde este correo con tus respuestas y te contacto muy pronto.\n\n" +
+"Lester Manzano · RHP Financial";
+/* ===== FIN CONFIGURACIÓN ===== */
+
 var KEY = "rhp_registros_v1";
 var memRegs = null;
 var canPersist = (function() {
@@ -321,35 +334,94 @@ function guardar(e) {
   var nombre = document.getElementById("nombre").value.trim();
   var tel = document.getElementById("telefono").value.trim();
   var correo = document.getElementById("correo").value.trim();
-  var edad = document.getElementById("edad").value.trim();
-  var zip = document.getElementById("zip").value.trim();
 
   var badNombre = nombre.length < 2;
   var badTel = tel.replace(/\D/g, "").length < 7;
   var badCorreo = !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo);
-  var edadNum = parseInt(edad.replace(/\D/g, ""), 10);
-  var badEdad = isNaN(edadNum) || edadNum < 1 || edadNum > 120;
-  var badZip = zip.replace(/\D/g, "").length < 5;
   setErr("errNombre", badNombre);
   setErr("errTelefono", badTel);
   setErr("errCorreo", badCorreo);
-  setErr("errEdad", badEdad);
-  setErr("errZip", badZip);
-  if (badNombre || badTel || badCorreo || badEdad || badZip) return false;
+  if (badNombre || badTel || badCorreo) return false;
 
+  var reg = { nombre: nombre, telefono: tel, correo: correo, fecha: new Date().toISOString(), enviado: false };
   var regs = getRegs();
-  regs.push({ nombre: nombre, telefono: tel, correo: correo, edad: String(edadNum), zip: zip, fecha: new Date().toISOString() });
+  regs.push(reg);
   saveRegs(regs);
 
   document.getElementById("regForm").reset();
   document.getElementById("successName").textContent = nombre;
   var box = document.getElementById("successBox");
+  if (navigator.onLine) {
+    box.innerHTML = "✅ ¡Listo! <span>" + esc(nombre) + "</span> ya está participando.<br><small>📧 Le enviamos la encuesta a su correo.</small>";
+    enviarRegistro(regs.length - 1);
+  } else {
+    box.innerHTML = "✅ ¡Listo! <span>" + esc(nombre) + "</span> ya está participando.<br><small>⏳ Sin conexión: guardado en este dispositivo, se enviará solo cuando haya internet.</small>";
+  }
   box.style.display = "block";
-  setTimeout(function(){ box.style.display = "none"; }, 4000);
+  setTimeout(function(){ box.style.display = "none"; }, 5000);
   updateCount();
+  actualizarEstado();
   document.getElementById("nombre").focus();
   return false;
 }
+
+function enviarRegistro(idx) {
+  var regs = getRegs();
+  var r = regs[idx];
+  if (!r || r.enviado || EMAIL_DESTINO.indexOf("REEMPLAZAR") === 0) return;
+  fetch("https://formsubmit.co/ajax/" + encodeURIComponent(EMAIL_DESTINO), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify({
+      nombre: r.nombre, telefono: r.telefono, email: r.correo,
+      _subject: "Nuevo registro RHP Financial: " + r.nombre,
+      _template: "table",
+      _captcha: "false",
+      _autoresponse: ENCUESTA_TEXTO
+    })
+  }).then(function(res){
+    if (res.ok) {
+      var regs2 = getRegs();
+      if (regs2[idx]) { regs2[idx].enviado = true; saveRegs(regs2); }
+      actualizarEstado();
+      if (document.getElementById("viewList").classList.contains("hidden") === false) renderList();
+    }
+  }).catch(function(){});
+}
+
+function flushPendientes() {
+  if (!navigator.onLine) return;
+  var regs = getRegs();
+  for (var i = 0; i < regs.length; i++) {
+    if (!regs[i].enviado) enviarRegistro(i);
+  }
+}
+
+function pendientesCount() {
+  return getRegs().filter(function(r){ return !r.enviado; }).length;
+}
+
+function actualizarEstado() {
+  var off = !navigator.onLine;
+  var ns = document.getElementById("netStatus");
+  ns.className = "netstatus " + (off ? "off" : "on");
+  ns.textContent = off ? "📶 Sin conexión — los registros se guardan en este dispositivo" : "🌐 Conectado";
+  var p = pendientesCount();
+  document.getElementById("pendingBox").style.display = p ? "block" : "none";
+  document.getElementById("pendingCount").textContent = p;
+}
+
+function descargarOffline() {
+  var blob = new Blob(["<!DOCTYPE html>\n" + document.documentElement.outerHTML], { type: "text/html;charset=utf-8" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "formulario-rhp-offline.html";
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+
+window.addEventListener("online", function(){ actualizarEstado(); flushPendientes(); });
+window.addEventListener("offline", actualizarEstado);
 
 function fmtFecha(iso) {
   try {
@@ -373,9 +445,8 @@ function renderList() {
     html += '<div class="reg"><div class="n"><span class="num">#' + num + '</span>' + esc(r.nombre) + '</div>' +
       '<div class="d">📞 <a href="tel:' + esc(r.telefono.replace(/\D/g,"")) + '">' + esc(r.telefono) + '</a>' +
       ' &nbsp;•&nbsp; ✉️ ' + esc(r.correo || "—") +
-      ' &nbsp;•&nbsp; 🎂 ' + esc(r.edad || "—") +
-      ' &nbsp;•&nbsp; 📮 ' + esc(r.zip) +
-      ' &nbsp;•&nbsp; 🕒 ' + esc(fmtFecha(r.fecha)) + '</div></div>';
+      ' &nbsp;•&nbsp; 🕒 ' + esc(fmtFecha(r.fecha)) +
+      ' &nbsp;•&nbsp; ' + (r.enviado ? "📧 enviado" : "⏳ pendiente") + '</div></div>';
   }
   box.innerHTML = html;
 }
@@ -388,9 +459,9 @@ function updateCount() {
 
 function textoPlano() {
   var regs = getRegs();
-  var lines = ["Nombre | Teléfono | Correo | Edad | Código Postal | Fecha"];
+  var lines = ["Nombre | Teléfono | Correo | Fecha | Estado"];
   regs.forEach(function(r){
-    lines.push(r.nombre + " | " + r.telefono + " | " + (r.correo || "") + " | " + (r.edad || "") + " | " + r.zip + " | " + fmtFecha(r.fecha));
+    lines.push(r.nombre + " | " + r.telefono + " | " + (r.correo || "") + " | " + fmtFecha(r.fecha) + " | " + (r.enviado ? "enviado" : "pendiente"));
   });
   return lines.join("\n");
 }
@@ -415,7 +486,7 @@ function descargarCSV() {
   if (!regs.length) { alert("No hay registros para descargar."); return; }
   var csv = "﻿Nombre,Telefono,Correo,Edad,Codigo Postal,Fecha\n";
   regs.forEach(function(r){
-    csv += '"' + r.nombre.replace(/"/g,'""') + '","' + r.telefono + '","' + (r.correo || "").replace(/"/g,'""') + '","' + (r.edad || "") + '","' + r.zip + '","' + fmtFecha(r.fecha) + '"\n';
+    csv += '"' + r.nombre.replace(/"/g,'""') + '","' + r.telefono + '","' + (r.correo || "").replace(/"/g,'""') + '","' + fmtFecha(r.fecha) + '","' + (r.enviado ? "enviado" : "pendiente") + '"\n';
   });
   var blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   var a = document.createElement("a");
@@ -435,6 +506,8 @@ function borrarTodo() {
 }
 
 updateCount();
+actualizarEstado();
+flushPendientes();
 if (!canPersist) { document.getElementById("nopersist").style.display = "block"; }
 </script>
 </body>
